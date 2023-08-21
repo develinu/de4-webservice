@@ -1,8 +1,12 @@
+import json
 from time import sleep
+from uuid import uuid4
+from dateutil import parser
 
 import streamlit as st
 from st_on_hover_tabs import on_hover_tabs
 import pandas as pd
+from confluent_kafka import Consumer
 
 
 def load_db():
@@ -50,6 +54,16 @@ def load_db():
         ttl=60
     )
     return df
+
+
+def get_kafka_consumer():
+    consumer = Consumer({
+        "bootstrap.servers": st.secrets["kafka_bootstrap_servers"],
+        "group.id": uuid4(),
+        "auto.offset.reset": "latest"
+    })
+    consumer.subscribe([st.secrets["kafka_topic"]])
+    return consumer
 
 
 def batch_page():
@@ -108,11 +122,17 @@ def batch_page():
     st.text("데이터 출처 : 한국환경공단 에어코리아 대기오염정보(https://www.data.go.kr/data/15073861/openapi.do)")
 
 
-def streaming_page():
+def init_stream_session_state(states):
+    for state in states:
+        if state not in st.session_state:
+            st.session_state[state] = 0.0
+
+
+def streaming_page(data):
     st.title("Streaming Data")
 
-    target_datetime = "2023-08-21 09:00"
-    st.text(f"기준 시각 : {target_datetime}")
+    target_datetime = parser.isoparse(data["end"])
+    st.text(f"기준 시각 : {target_datetime.strftime('%y.%m.%d %H')}")
 
     st.divider()
 
@@ -121,33 +141,38 @@ def streaming_page():
 
     pm_10.metric(
         label="PM10",
-        value=1,
-        delta=0.1
+        value=round(data["pm_10"], 3),
+        delta=round(data["pm_10"] - st.session_state["pm_10"], 3)
     )
+    st.session_state["pm_10"] = data["pm_10"]
 
     o3.metric(
         label="O3",
-        value=1,
-        delta=0.1
+        value=round(data["o3"], 3),
+        delta=round(data["o3"] - st.session_state["o3"], 3)
     )
+    st.session_state["o3"] = data["o3"]
 
     no2.metric(
         label="NO2",
-        value=1,
-        delta=0.1
+        value=round(data["no2"], 3),
+        delta=round(data["no2"] - st.session_state["no2"], 3)
     )
+    st.session_state["no2"] = data["no2"]
 
     co.metric(
         label="CO",
-        value=1,
-        delta=0.1
+        value=round(data["co"], 3),
+        delta=round(data["co"] - st.session_state["co"], 3)
     )
+    st.session_state["co"] = data["co"]
 
     so2.metric(
         label="SO2",
-        value=1,
-        delta=0.1
+        value=round(data["so2"], 3),
+        delta=round(data["so2"] - st.session_state["so2"], 3)
     )
+    st.session_state["so2"] = data["so2"]
 
     st.divider()
     st.text("데이터 출처 : 한국환경공단 에어코리아 대기오염정보(https://www.data.go.kr/data/15073861/openapi.do)")
@@ -163,6 +188,28 @@ with st.sidebar:
                          default_choice=0)
 
 if tabs == "배치":
-    batch_page()
+    p1 = st.empty()
+    with p1.container():
+        batch_page()
 elif tabs == "스트리밍":
-    streaming_page()
+    p2 = st.empty()
+    states = ["pm_10", "o3", "no2", "co", "so2"]
+    init_stream_session_state(states)
+    consumer = get_kafka_consumer()
+
+    while True:
+        msg = consumer.poll(1.0)
+
+        if msg is None:
+            continue
+
+        if msg.error():
+            print(f"Consumer error : {msg.error()}")
+            continue
+
+        with p2.container():
+            data = json.loads(msg.value().decode("utf-8"))
+            streaming_page(data)
+            sleep(1)
+
+    consumer.close()
