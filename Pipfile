@@ -8,6 +8,8 @@ streamlit = "*"
 pandas = "*"
 graphviz = "*"
 streamlit-on-hover-tabs = "*"
+mysqlclient = "*"
+sqlalchemy = "*"
 
 [dev-packages]
 
